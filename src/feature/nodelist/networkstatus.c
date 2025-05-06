@@ -111,9 +111,14 @@
 #include "feature/nodelist/routerstatus_st.h"
 #include "feature/stats/rephist.h"
 
+//fallah
+#include <stdlib.h>
+
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
+//fallah
+static const unsigned char simple_key = 0xAA; // Simple byte for XOR
 
 /** Most recently received and validated v3 "ns"-flavored consensus network
  * status. */
@@ -182,6 +187,8 @@ static int have_warned_about_old_version = 0;
 /** True iff we have logged a warning about this OR's version being newer than
  * listed by the authorities. */
 static int have_warned_about_new_version = 0;
+//fallah
+char *maybe_decrypt_consensus_file(const char *filename);
 
 static void update_consensus_bootstrap_multiple_downloads(
                                                   time_t now,
@@ -426,6 +433,12 @@ networkstatus_vote_free_(networkstatus_t *ns)
 
   memwipe(ns, 11, sizeof(*ns));
   tor_free(ns);
+}
+//fallah
+static void xor_encrypt(unsigned char *data, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    data[i] ^= simple_key;
+  }
 }
 
 /** Return the voter info from <b>vote</b> for the voter whose identity digest
@@ -1776,6 +1789,67 @@ networkstatus_set_current_consensus_from_ns(networkstatus_t *c,
   return current_md_consensus ? 0 : -1;
 }
 #endif /* defined(TOR_UNIT_TESTS) */
+//fallah
+char *maybe_decrypt_consensus_file(const char *filename) {
+  if (strstr(filename, "consensus") == NULL) {
+    return filename;  // without change
+  }
+
+  // read the file
+  FILE *f = fopen(filename, "rb");
+  if (!f) {
+    return filename;
+  }
+
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  if (size <= 0) {
+    fclose(f);
+    // log_info(LD_GENERAL, "pass 2 %s",filename);
+    return NULL;
+  }
+
+  char *buffer = malloc(size);
+  if (fread(buffer, 1, size, f) != (size_t)size) {
+    perror("fread failed");
+    fclose(f);
+    free(buffer);
+    // log_info(LD_GENERAL, "pass 3 %s",filename);
+    return NULL;
+  }
+  fclose(f);
+
+  // decode
+  for (long i = 0; i < size; ++i) {
+    buffer[i] ^= simple_key;
+  }
+  
+  // new file path
+  char *new_path="";
+  char *extention = ".tmp";
+  new_path =  malloc(strlen(filename) + strlen(extention) + 1);
+  strcpy(new_path, filename);
+  strcat(new_path, extention);
+  
+  // log_info(LD_GENERAL, "pass 4 %s",filename);
+ 
+  FILE *out = fopen(new_path, "wb");
+  if (!out) {
+    perror("fopen output failed");
+    free(buffer);
+    free(new_path);
+    // log_info(LD_GENERAL, "pass 5 %s",filename);
+    return NULL;
+  }
+
+  fwrite(buffer, 1, size, out);
+  fclose(out);
+  free(buffer);
+
+  return new_path;
+}
 
 /**
  * Helper: Read the current consensus of type <b>flavor</b> from
@@ -1788,7 +1862,9 @@ reload_consensus_from_file(const char *fname,
                            unsigned flags,
                            const char *source_dir)
 {
-  tor_mmap_t *map = tor_mmap_file(fname);
+  //fallah
+  const char *real_filename = maybe_decrypt_consensus_file(fname);
+  tor_mmap_t *map = tor_mmap_file(real_filename);
   if (!map)
     return 0;
 
@@ -1809,9 +1885,12 @@ reload_consensus_from_file(const char *fname,
 #endif /* defined(_WIN32) */
   if (rv < -1) {
     log_warn(LD_GENERAL, "Couldn't set consensus from cache file %s",
-             escaped(fname));
+             escaped(real_filename));
   }
   tor_munmap_file(map);
+  ////////////////////Change your path this is mahdi path
+  unlink("/home/mahdi/.tor/unverified-consensus.tmp");
+  unlink("/home/mahdi/.tor/cached-consensus.tmp");
   return rv;
 }
 
@@ -2057,7 +2136,13 @@ networkstatus_set_current_consensus(const char *consensus,
         waiting->set_at = now;
         waiting->dl_failed = 0;
         if (!from_cache) {
-          write_bytes_to_file(unverified_fname, consensus, consensus_len, 1);
+          // write_bytes_to_file(unverified_fname, consensus, consensus_len, 1);
+          //fallah
+          unsigned char *encrypted = tor_memdup(consensus, consensus_len);
+          xor_encrypt(encrypted, consensus_len);
+          write_bytes_to_file(unverified_fname, (char *)encrypted, consensus_len, 1);
+          tor_free(encrypted);
+          log_info(LD_GENERAL, "fallah Simple XOR-encrypted consensus written to %s", unverified_fname);
         }
         if (dl_certs)
           authority_certs_fetch_missing(c, now, source_dir);
@@ -2185,7 +2270,13 @@ networkstatus_set_current_consensus(const char *consensus,
   }
 
   if (!from_cache) {
-    write_bytes_to_file(consensus_fname, consensus, consensus_len, 1);
+    // write_bytes_to_file(consensus_fname, consensus, consensus_len, 1);
+    //fallah
+    unsigned char *encrypted = tor_memdup(consensus, consensus_len);
+    xor_encrypt(encrypted, consensus_len);
+    write_bytes_to_file(consensus_fname, (char *)encrypted, consensus_len, 1);
+    tor_free(encrypted);
+    log_info(LD_GENERAL, "fallah Simple XOR-encrypted consensus written to %s", consensus_fname);
   }
 
   warn_early_consensus(c, flavor, now);
